@@ -129,9 +129,9 @@ export async function analyzeResponsiveLive(url: string): Promise<Issue[]> {
     await page.setViewportSize({ width: 375, height: 812 });
 
     try {
-      await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
+      await page.goto(url, { waitUntil: "load", timeout: 20000 });
     } catch {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
     }
 
     // Check horizontal overflow

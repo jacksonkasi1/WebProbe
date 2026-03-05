@@ -184,8 +184,8 @@ export async function analyzeAccessibilityLive(url: string): Promise<Issue[]> {
 
   try {
     const page = await browser.newPage();
-    await page.goto(url, { waitUntil: "networkidle", timeout: 30000 }).catch(() =>
-      page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 })
+    await page.goto(url, { waitUntil: "load", timeout: 20000 }).catch(() =>
+      page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {})
     );
 
     // Check for color contrast issues via computed styles
