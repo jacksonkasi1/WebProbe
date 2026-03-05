@@ -7,20 +7,13 @@ OpenCode, and other AI agents can read and act on.
 ## Quick Start
 
 ```bash
-# Clone and install
-git clone https://github.com/your-repo/webprobe.git
-cd webprobe
-bun install
-bunx playwright install chromium
+# Install globally
+npm install -g @jacksonkasi1/webprobe
+bun install -g @jacksonkasi1/webprobe
 
-# Initialize standards for your project
-bun run dev -- init
-
-# Audit a website
-bun run dev -- check --url http://localhost:3000 --code .
-
-# Screenshots only
-bun run dev -- screenshot http://localhost:3000
+# Run directly without installing
+npx @jacksonkasi1/webprobe init
+bunx @jacksonkasi1/webprobe check --url http://localhost:3000 --code .
 ```
 
 ## Usage Modes
