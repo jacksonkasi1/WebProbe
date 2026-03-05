@@ -1,17 +1,17 @@
 import chalk from "chalk";
 import ora from "ora";
 import { captureScreenshots, captureAndAnalyzePage } from "./capture/screenshot.js";
-import { analyzeSEO } from "./analyzers/seo.js";
-import { analyzeResponsive, analyzeResponsiveLive } from "./analyzers/responsive.js";
-import { analyzeAccessibility, analyzeAccessibilityLive } from "./analyzers/accessibility.js";
-import { analyzePerformance } from "./analyzers/performance.js";
-import { analyzeLinks, checkBrokenLinks } from "./analyzers/links.js";
+import { analyzeResponsiveLive } from "./analyzers/responsive.js";
+import { analyzeAccessibilityLive } from "./analyzers/accessibility.js";
 import { analyzeCodeQuality } from "./analyzers/code-quality.js";
-import { confirmSiteInfo, confirmProceed } from "./prompts.js";
+import { confirmSiteInfo, confirmProceed, askMultiLanguage } from "./prompts.js";
 import { generateMarkdownReport } from "./report/markdown.js";
-import { writeFileSync } from "fs";
+import { writeFileSync, mkdirSync } from "fs";
+import { dirname } from "path";
 import type { CheckOptions, CheckResult, Issue, SiteInfo, Category } from "./types.js";
 import { VIEWPORTS } from "./types.js";
+import { crawlSite } from "./crawl/crawler.js";
+import type { CrawlIssue, CrawlPageData } from "./crawl/types.js";
 
 export async function runCheck(options: CheckOptions): Promise<void> {
   const startTime = Date.now();
@@ -22,31 +22,70 @@ export async function runCheck(options: CheckOptions): Promise<void> {
   console.log(chalk.bold("\n🔍 WebProbe — Web Standards Audit\n"));
   console.log(chalk.dim("─".repeat(50)));
 
-  // ─── Step 1: Analyze URL ────────────────────────────
+  // ─── Step 1: Crawl & Analyze URL ────────────────────
   if (options.url) {
     console.log(chalk.cyan(`\n📡 Target URL: ${options.url}\n`));
 
-    // 1a: Capture page data
-    const spinner = ora("Fetching and analyzing page...").start();
-    let pageData: Awaited<ReturnType<typeof captureAndAnalyzePage>>;
+    // 1a: Ask multi-language question if not set via flag
+    let multiLanguage = options.multiLanguage ?? false;
+    if (options.interactive && options.multiLanguage === undefined) {
+      multiLanguage = await askMultiLanguage();
+    }
+
+    // 1b: Crawl all pages using the fixseo-based crawler
+    const crawlSpinner = ora("Starting site crawl...").start();
+    let crawlResult: Awaited<ReturnType<typeof crawlSite>>;
+    let pagesScanned = 0;
 
     try {
-      pageData = await captureAndAnalyzePage(options.url);
-      spinner.succeed("Page analyzed");
+      crawlResult = await crawlSite({
+        url: options.url,
+        maxPages: 25,
+        maxDepth: 10,
+        includeSitemap: true,
+        silent: true,
+        multiLanguage,
+        onProgress: (scanned, queue, currentUrl) => {
+          pagesScanned = scanned;
+          crawlSpinner.text = `Crawling... ${scanned} pages scanned | ${queue} in queue`;
+        },
+      });
+      crawlSpinner.succeed(
+        `Crawl complete — ${crawlResult.pages.length} pages scanned`
+      );
     } catch (err) {
-      spinner.fail(`Failed to load page: ${err}`);
+      crawlSpinner.fail(`Crawl failed: ${err}`);
       return;
     }
 
-    // Extract site info
-    siteInfo = {
-      name: pageData.title || "Unknown",
-      domain: new URL(options.url).hostname,
-      language: pageData.language || "en",
-      description: pageData.metaTags["description"] || "",
-    };
+    // Map crawl issues to WebProbe issues
+    for (const cIssue of crawlResult.topIssues) {
+      allIssues.push(mapCrawlIssue(cIssue));
+    }
 
-    // 1b: Take screenshots
+    // Also map grouped issues not in topIssues for full coverage
+    const topCodes = new Set(crawlResult.topIssues.map(i => `${i.severity}-${i.code}-${i.url}`));
+    for (const grouped of crawlResult.groupedIssues) {
+      for (const url of grouped.urls) {
+        const key = `${grouped.severity}-${grouped.code}-${url}`;
+        if (!topCodes.has(key)) {
+          allIssues.push(mapCrawlIssue({ ...grouped, url }));
+        }
+      }
+    }
+
+    // Set site info from first crawled page
+    const firstPage = crawlResult.pages[0];
+    if (firstPage) {
+      siteInfo = {
+        name: firstPage.title || "Unknown",
+        domain: new URL(options.url).hostname,
+        language: firstPage.lang || "en",
+        description: firstPage.metaDescription || "",
+      };
+    }
+
+    // 1c: Capture screenshots using Playwright (single page, fixed hang)
     const viewportNames = options.viewports.split(",").map((v) => v.trim());
     const viewports = viewportNames
       .map((name) => VIEWPORTS[name])
@@ -72,104 +111,86 @@ export async function runCheck(options: CheckOptions): Promise<void> {
       }
     }
 
-    // 1c: Run URL-based analyzers
-    const analyzerSpinner = ora("Running SEO analysis...").start();
-    allIssues.push(
-      ...analyzeSEO(
-        {
-          title: pageData.title,
-          metaTags: pageData.metaTags,
-          headings: pageData.headings,
-          images: pageData.images,
-          canonical: pageData.canonical,
-          language: pageData.language,
-          html: pageData.html,
-          url: options.url,
-        },
-        siteInfo.domain
-      )
-    );
-    analyzerSpinner.text = "Running responsive analysis...";
-
-    allIssues.push(
-      ...analyzeResponsive({
-        html: pageData.html,
-        hasViewportMeta: pageData.hasViewportMeta,
-        viewportMeta: pageData.viewportMeta,
-        url: options.url,
-      })
-    );
-
-    analyzerSpinner.text = "Running accessibility analysis...";
-    allIssues.push(
-      ...analyzeAccessibility({
-        html: pageData.html,
-        images: pageData.images,
-        headings: pageData.headings,
-        language: pageData.language,
-        url: options.url,
-      })
-    );
-
-    analyzerSpinner.text = "Running performance analysis...";
-    allIssues.push(
-      ...analyzePerformance({
-        html: pageData.html,
-        images: pageData.images,
-        performanceMetrics: pageData.performanceMetrics,
-        url: options.url,
-      })
-    );
-
-    analyzerSpinner.text = "Checking links...";
-    allIssues.push(
-      ...analyzeLinks({
-        links: pageData.links,
-        url: options.url,
-      })
-    );
-
-    analyzerSpinner.text = "Running live responsive checks...";
+    // 1d: Run Playwright-based live checks (responsive + accessibility)
+    // These only run on the entry URL since they need a real browser
+    // Hard 45s timeout prevents hangs on sites with persistent network activity
+    const liveSpinner = ora("Running live browser checks...").start();
     try {
-      allIssues.push(...(await analyzeResponsiveLive(options.url)));
+      const liveTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 45000));
+      const liveChecks = Promise.allSettled([
+        analyzeResponsiveLive(options.url),
+        analyzeAccessibilityLive(options.url),
+      ]);
+
+      const liveResult = await Promise.race([liveChecks, liveTimeout]);
+
+      if (liveResult !== null) {
+        const [responsiveIssues, accessibilityIssues] = liveResult;
+        if (responsiveIssues.status === "fulfilled") {
+          allIssues.push(...responsiveIssues.value);
+        }
+        if (accessibilityIssues.status === "fulfilled") {
+          allIssues.push(...accessibilityIssues.value);
+        }
+        liveSpinner.succeed("Live browser checks complete");
+      } else {
+        liveSpinner.warn("Live browser checks timed out — skipped");
+      }
     } catch (err) {
+      liveSpinner.fail(`Live checks failed: ${err}`);
+    }
+
+    // 1e: Console errors from Playwright on entry page (with hard timeout guard)
+    try {
+      const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 25000));
+      const capture = captureAndAnalyzePage(options.url);
+      const pageData = await Promise.race([capture, timeout]);
+      if (pageData) {
+        const errors = pageData.consoleLogs.filter((l) => l.type === "error");
+        if (errors.length > 0) {
+          allIssues.push({
+            id: "code-console-errors",
+            category: "code-quality",
+            severity: "warning",
+            title: `${errors.length} browser console error(s)`,
+            description: "JavaScript errors were logged in the browser console.",
+            actual: errors
+              .slice(0, 5)
+              .map((e) => e.text)
+              .join("\n"),
+            expected: "No console errors",
+            url: options.url,
+          });
+        }
+      }
+    } catch {
       // Non-fatal
     }
 
-    analyzerSpinner.text = "Running live accessibility checks...";
-    try {
-      allIssues.push(...(await analyzeAccessibilityLive(options.url)));
-    } catch (err) {
-      // Non-fatal
+    // Print crawl summary per-page
+    console.log(chalk.dim(`\n  Pages crawled:`));
+    for (const page of crawlResult.pages.slice(0, 10)) {
+      const pageIssueCount = crawlResult.groupedIssues.reduce((n, g) => {
+        return n + (g.urls.includes(page.url) ? 1 : 0);
+      }, 0);
+      const icon = pageIssueCount === 0 ? chalk.green("✓") : chalk.yellow("!");
+      console.log(chalk.dim(`    ${icon} ${page.url} — ${pageIssueCount} issue(s)`));
+    }
+    if (crawlResult.pages.length > 10) {
+      console.log(chalk.dim(`    … and ${crawlResult.pages.length - 10} more pages`));
     }
 
-    analyzerSpinner.text = "Checking for broken links...";
-    try {
-      allIssues.push(
-        ...(await checkBrokenLinks(pageData.links, options.url))
-      );
-    } catch (err) {
-      // Non-fatal
-    }
-
-    analyzerSpinner.succeed("All URL-based analyzers complete");
-
-    // Log console errors if any
-    const errors = pageData.consoleLogs.filter((l) => l.type === "error");
-    if (errors.length > 0) {
-      allIssues.push({
-        id: "code-console-errors",
-        category: "code-quality",
-        severity: "warning",
-        title: `${errors.length} browser console error(s)`,
-        description: "JavaScript errors were logged in the browser console.",
-        actual: errors
-          .slice(0, 5)
-          .map((e) => e.text)
-          .join("\n"),
-        expected: "No console errors",
-        url: options.url,
-      });
+    if (crawlResult.sitemap) {
+      const sm = crawlResult.sitemap;
+      console.log(chalk.dim(`\n  Sitemap: ${sm.url ?? "none"}`));
+      console.log(chalk.dim(`    URLs in sitemap: ${sm.urlsInSitemap}`));
+      console.log(chalk.dim(`    URLs tested: ${sm.urlsTested}`));
+      if (sm.urlsWithErrors > 0) {
+        console.log(chalk.red(`    URLs with errors: ${sm.urlsWithErrors}`));
+      }
+      if (!sm.referencedInRobots) {
+        console.log(chalk.yellow(`    ⚠ Sitemap not referenced in robots.txt`));
+      }
     }
   }
 
@@ -216,24 +237,33 @@ export async function runCheck(options: CheckOptions): Promise<void> {
 
   if (critical.length > 0) {
     console.log(chalk.red(`  🔴 Critical: ${critical.length}`));
-    critical.forEach((i) =>
-      console.log(chalk.red(`     • ${i.title}`))
+    critical.slice(0, 10).forEach((i) =>
+      console.log(chalk.red(`     • ${i.title}${i.url ? chalk.dim(` [${i.url}]`) : ""}`))
     );
+    if (critical.length > 10) {
+      console.log(chalk.red(`     … and ${critical.length - 10} more`));
+    }
   }
   if (warnings.length > 0) {
     console.log(chalk.yellow(`  🟡 Warning:  ${warnings.length}`));
-    warnings.forEach((i) =>
-      console.log(chalk.yellow(`     • ${i.title}`))
+    warnings.slice(0, 10).forEach((i) =>
+      console.log(chalk.yellow(`     • ${i.title}${i.url ? chalk.dim(` [${i.url}]`) : ""}`))
     );
+    if (warnings.length > 10) {
+      console.log(chalk.yellow(`     … and ${warnings.length - 10} more`));
+    }
   }
   if (info.length > 0) {
     console.log(chalk.blue(`  🔵 Info:     ${info.length}`));
-    info.forEach((i) =>
+    info.slice(0, 5).forEach((i) =>
       console.log(chalk.blue(`     • ${i.title}`))
     );
+    if (info.length > 5) {
+      console.log(chalk.blue(`     … and ${info.length - 5} more`));
+    }
   }
   if (deduped.length === 0) {
-    console.log(chalk.green("  ✅ No issues found! Great job!"));
+    console.log(chalk.green("  ✅ No issues found!"));
   }
 
   console.log(chalk.dim(`\n  Total: ${deduped.length} issue(s)`));
@@ -271,11 +301,15 @@ export async function runCheck(options: CheckOptions): Promise<void> {
   }
 
   // ─── Step 8: Generate Report ───────────────────────
+  // Ensure the output directory exists
+  mkdirSync(dirname(options.report), { recursive: true });
+
   if (options.format === "json") {
-    writeFileSync(options.report.replace(".md", ".json"), JSON.stringify(result, null, 2));
-    console.log(chalk.green(`\n📄 JSON report saved: ${options.report.replace(".md", ".json")}`));
+    const jsonPath = options.report.replace(/\.md$/, ".json");
+    writeFileSync(jsonPath, JSON.stringify(result, null, 2));
+    console.log(chalk.green(`\n📄 JSON report saved: ${jsonPath}`));
   } else {
-    const markdown = generateMarkdownReport(result);
+    const markdown = generateMarkdownReport(result, options.report);
     writeFileSync(options.report, markdown);
     console.log(chalk.green(`\n📄 Report saved: ${options.report}`));
   }
@@ -296,12 +330,25 @@ export async function runCheck(options: CheckOptions): Promise<void> {
         "   Use your AI coding agent to apply fixes based on the report.\n"
       )
     );
-    // In a full implementation, you could apply simple fixes here
-    // (e.g., adding alt="", adding missing meta tags)
-    // But for complex fixes, the AI agent is better suited.
   }
 
   console.log();
+}
+
+function mapCrawlIssue(cIssue: CrawlIssue): Issue {
+  let severity: "critical" | "warning" | "info" = "info";
+  if (cIssue.severity === "high") severity = "critical";
+  else if (cIssue.severity === "medium") severity = "warning";
+
+  return {
+    id: `seo-${cIssue.code}-${cIssue.url ?? "global"}`,
+    category: "seo",
+    severity,
+    title: cIssue.message,
+    description: cIssue.recommendation || "",
+    url: cIssue.url,
+    fixSuggestion: cIssue.recommendation,
+  };
 }
 
 function deduplicateIssues(issues: Issue[]): Issue[] {

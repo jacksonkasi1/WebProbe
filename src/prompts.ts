@@ -1,5 +1,20 @@
 import type { SiteInfo } from "./types.js";
 
+export async function askMultiLanguage(): Promise<boolean> {
+  const inquirer = await import("inquirer");
+
+  const { isMulti } = await inquirer.default.prompt([
+    {
+      type: "confirm",
+      name: "isMulti",
+      message: "Does this site serve content in multiple languages? (affects hreflang checks)",
+      default: false,
+    },
+  ]);
+
+  return isMulti;
+}
+
 export async function confirmSiteInfo(
   detected: Partial<SiteInfo>
 ): Promise<SiteInfo> {

@@ -46,10 +46,11 @@ program
   .option("-u, --url <url>", "Website URL to check (localhost or deployed)")
   .option("-c, --code <path>", "Source code directory to analyze")
   .option("--auto-fix", "Attempt to auto-fix issues in source code", false)
-  .option("-r, --report <path>", "Report output path", "./webprobe-report.md")
+  .option("--multi-language", "Site has multiple language versions (enables hreflang checks)", false)
+  .option("-r, --report <path>", "Report output path", "./output/webprobe-report.md")
   .option("-f, --format <format>", "Output format: markdown or json", "markdown")
   .option("--no-interactive", "Skip confirmation prompts (for agent use)")
-  .option("-s, --screenshots <dir>", "Screenshots directory", "./webprobe-screenshots")
+  .option("-s, --screenshots <dir>", "Screenshots directory", "./output/screenshots")
   .option("-v, --viewports <list>", "Viewports to capture (comma-separated)", "mobile,tablet,desktop")
   .action(async (options) => {
     try {
@@ -90,6 +91,7 @@ program
         interactive: options.interactive !== false,
         screenshots: options.screenshots,
         viewports: options.viewports,
+        multiLanguage: options.multiLanguage,
       });
     } catch (err) {
       console.error(chalk.red("Error:"), err);
@@ -101,7 +103,7 @@ program
 program
   .command("screenshot <url>")
   .description("Capture screenshots at different viewports")
-  .option("-o, --output <dir>", "Output directory", "./webprobe-screenshots")
+  .option("-o, --output <dir>", "Output directory", "./output/screenshots")
   .option("-v, --viewports <list>", "Viewports: mobile,tablet,desktop,wide", "mobile,tablet,desktop")
   .action(async (url, options) => {
     try {

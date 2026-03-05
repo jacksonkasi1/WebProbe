@@ -51,6 +51,7 @@ export interface CheckOptions {
   interactive: boolean;
   screenshots: string;
   viewports: string;
+  multiLanguage?: boolean;
 }
 
 export interface CheckResult {
