@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import ora from "ora";
 import { captureScreenshots, captureAndAnalyzePage } from "./capture/screenshot.js";
-import { analyzeResponsiveLive } from "./analyzers/responsive.js";
+import { analyzeResponsiveLive, analyzeResponsiveLiveBatch } from "./analyzers/responsive.js";
 import { analyzeAccessibilityLive } from "./analyzers/accessibility.js";
 import { analyzeCodeQuality } from "./analyzers/code-quality.js";
 import { confirmSiteInfo, confirmProceed, askMultiLanguage } from "./prompts.js";
@@ -116,10 +116,14 @@ export async function runCheck(options: CheckOptions): Promise<void> {
     // Hard 45s timeout prevents hangs on sites with persistent network activity
     const liveSpinner = ora("Running live browser checks...").start();
     try {
-      const liveTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 90000));
+      const urlsToTest = crawlResult.pages.map((p) => p.url); // test all pages
+      
+      const liveTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 300000)); // 5 minutes max for full site layout checks
       const liveChecks = Promise.allSettled([
-        analyzeResponsiveLive(options.url, viewports),
-        analyzeAccessibilityLive(options.url),
+        analyzeResponsiveLiveBatch(urlsToTest, viewports, (url) => {
+          liveSpinner.text = `Visual/responsive check: ${url}`;
+        }),
+        analyzeAccessibilityLive(options.url), // Still just entry page for now as a baseline
       ]);
 
       const liveResult = await Promise.race([liveChecks, liveTimeout]);
@@ -134,7 +138,7 @@ export async function runCheck(options: CheckOptions): Promise<void> {
         }
         liveSpinner.succeed("Live browser checks complete");
       } else {
-        liveSpinner.warn("Live browser checks timed out — skipped");
+        liveSpinner.warn("Live browser checks timed out — partial results saved");
       }
     } catch (err) {
       liveSpinner.fail(`Live checks failed: ${err}`);
