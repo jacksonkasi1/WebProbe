@@ -1,5 +1,5 @@
 {
-  "name": "webprobe",
+  "name": "@jacksonkasi1/webprobe",
   "version": "1.0.0",
   "description": "Web standards auditor for AI coding agents — checks SEO, responsive design, accessibility, performance, and visual standards",
   "type": "module",
