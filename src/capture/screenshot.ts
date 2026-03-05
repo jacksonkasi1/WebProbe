@@ -37,39 +37,55 @@ export async function captureScreenshots(
       // Brief pause for late-rendering JS
       await page.waitForTimeout(500);
 
-      const slug = vp.name.toLowerCase().replace(/[^a-z0-9]/g, "-");
-      const filename = `${slug}-${vp.width}x${vp.height}.png`;
-      const filepath = join(outputDir, filename);
+      // Extract a safe URL path to make unique filenames per page
+      try {
+        const parsedUrl = new URL(url);
+        let pathSlug = parsedUrl.pathname.replace(/[^a-zA-Z0-9]/g, "-").replace(/-+/g, "-");
+        if (pathSlug === "-" || pathSlug === "") pathSlug = "index";
+        if (pathSlug.startsWith("-")) pathSlug = pathSlug.substring(1);
+        if (pathSlug.endsWith("-")) pathSlug = pathSlug.substring(0, pathSlug.length - 1);
+        
+        const slug = vp.name.toLowerCase().replace(/[^a-z0-9]/g, "-");
+        
+        // Structure: index--mobile--375x812.png OR about-us--desktop--1440x900.png
+        const filename = `${pathSlug}--${slug}--${vp.width}x${vp.height}.png`;
+        const filepath = join(outputDir, filename);
 
-      await page.screenshot({
-        path: filepath,
-        fullPage: true,
-      });
-
-      // Also take above-the-fold screenshot
-      const foldFilename = `${slug}-${vp.width}x${vp.height}-fold.png`;
-      const foldPath = join(outputDir, foldFilename);
-      await page.screenshot({
-        path: foldPath,
-        fullPage: false,
-      });
-
-      screenshots.push(
-        {
-          viewport: vp.name,
-          width: vp.width,
-          height: vp.height,
+        await page.screenshot({
           path: filepath,
           fullPage: true,
-        },
-        {
-          viewport: `${vp.name} (above fold)`,
-          width: vp.width,
-          height: vp.height,
+        });
+
+        // Also take above-the-fold screenshot
+        const foldFilename = `${pathSlug}--${slug}--${vp.width}x${vp.height}-fold.png`;
+        const foldPath = join(outputDir, foldFilename);
+        await page.screenshot({
           path: foldPath,
           fullPage: false,
-        }
-      );
+        });
+
+        screenshots.push(
+          {
+            viewport: vp.name,
+            width: vp.width,
+            height: vp.height,
+            path: filepath,
+            fullPage: true,
+          },
+          {
+            viewport: `${vp.name} (above fold)`,
+            width: vp.width,
+            height: vp.height,
+            path: foldPath,
+            fullPage: false,
+          }
+        );
+      } catch (e) {
+        // Fallback if URL parsing fails
+        const slug = vp.name.toLowerCase().replace(/[^a-z0-9]/g, "-");
+        const filename = `${slug}-${vp.width}x${vp.height}.png`;
+        await page.screenshot({ path: join(outputDir, filename), fullPage: true });
+      }
 
       await context.close();
     }

@@ -85,26 +85,40 @@ export async function runCheck(options: CheckOptions): Promise<void> {
       };
     }
 
-    // 1c: Capture screenshots using Playwright (single page, fixed hang)
+    // 1c: Capture screenshots using Playwright
+    // Now captures screenshots for ALL crawled pages in parallel chunks
     const viewportNames = options.viewports.split(",").map((v) => v.trim());
     const viewports = viewportNames
       .map((name) => VIEWPORTS[name])
       .filter(Boolean);
 
     if (viewports.length > 0) {
+      const urlsToScreenshot = crawlResult.pages.map((p) => p.url);
       const screenshotSpinner = ora(
-        `Capturing ${viewports.length} viewport screenshots...`
+        `Capturing screenshots for ${urlsToScreenshot.length} pages...`
       ).start();
 
       try {
-        const shots = await captureScreenshots(
-          options.url,
-          viewports,
-          options.screenshots
-        );
-        screenshots.push(...shots);
+        // Run in batches of 3 to avoid overwhelming memory
+        const chunkSize = 3;
+        for (let i = 0; i < urlsToScreenshot.length; i += chunkSize) {
+          const chunk = urlsToScreenshot.slice(i, i + chunkSize);
+          screenshotSpinner.text = `Capturing screenshots: Batch ${Math.floor(i/chunkSize) + 1}/${Math.ceil(urlsToScreenshot.length/chunkSize)}...`;
+          
+          const chunkPromises = chunk.map(url => 
+            captureScreenshots(url, viewports, options.screenshots)
+          );
+          
+          const chunkResults = await Promise.allSettled(chunkPromises);
+          for (const result of chunkResults) {
+            if (result.status === "fulfilled") {
+              screenshots.push(...result.value);
+            }
+          }
+        }
+        
         screenshotSpinner.succeed(
-          `Captured ${shots.length} screenshots → ${options.screenshots}/`
+          `Captured ${screenshots.length} screenshots → ${options.screenshots}/`
         );
       } catch (err) {
         screenshotSpinner.fail(`Screenshot capture failed: ${err}`);
