@@ -118,7 +118,7 @@ export async function runCheck(options: CheckOptions): Promise<void> {
     try {
       const liveTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 45000));
       const liveChecks = Promise.allSettled([
-        analyzeResponsiveLive(options.url),
+        analyzeResponsiveLive(options.url, viewports),
         analyzeAccessibilityLive(options.url),
       ]);
 
@@ -312,6 +312,26 @@ export async function runCheck(options: CheckOptions): Promise<void> {
     const markdown = generateMarkdownReport(result, options.report);
     writeFileSync(options.report, markdown);
     console.log(chalk.green(`\n📄 Report saved: ${options.report}`));
+
+    // Save responsive report in a separate file
+    const responsiveIssues = result.issues.filter(i => i.category === "responsive");
+    if (responsiveIssues.length > 0) {
+      const responsiveResult: CheckResult = {
+        ...result,
+        issues: responsiveIssues,
+        summary: {
+          total: responsiveIssues.length,
+          critical: responsiveIssues.filter((i) => i.severity === "critical").length,
+          warning: responsiveIssues.filter((i) => i.severity === "warning").length,
+          info: responsiveIssues.filter((i) => i.severity === "info").length,
+          byCategory: { responsive: responsiveIssues.length } as any,
+        }
+      };
+      const responsivePath = options.report.replace(/\.md$/, "-responsive.md");
+      const responsiveMarkdown = generateMarkdownReport(responsiveResult, responsivePath);
+      writeFileSync(responsivePath, responsiveMarkdown);
+      console.log(chalk.green(`📄 Responsive Report saved: ${responsivePath}`));
+    }
   }
 
   if (screenshots.length > 0) {
