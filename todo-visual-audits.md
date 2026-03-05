@@ -6,11 +6,11 @@
 - [x] **Off-Screen Elements & Horizontal Scroll:** Elements extending beyond `window.innerWidth`.
 - [x] **Element Overlap:** Sibling or floating text/containers intersecting mathematically without intentional `z-index` stacking.
 - [x] **Touch Target Size Violations:** Buttons, links, or inputs smaller than Apple's HIG standard (44x44px).
-- [ ] **Uncentered Modals/Popups:** `position: absolute` or `fixed` elements where the left and right distance to the viewport edges differ significantly.
-- [ ] **Invisible Text:** Text where `color` exactly matches the `background-color`.
-- [ ] **Container Text Overflow:** Text nodes where `scrollWidth` is greater than `clientWidth`, indicating text is spilling out of its box or causing a scrollbar inside a card.
-- [ ] **Proximity Violations:** Interactive elements (like two buttons) placed too close together (e.g., < 8px gap).
-- [ ] **Basic Contrast Ratio:** Comparing CSS `color` against CSS `background-color` (only works on solid backgrounds, not images).
+- [x] **Uncentered Modals/Popups:** `position: absolute` or `fixed` elements where the left and right distance to the viewport edges differ significantly.
+- [x] **Invisible Text:** Text where `color` exactly matches the `background-color`.
+- [x] **Container Text Overflow:** Text nodes where `scrollWidth` is greater than `clientWidth`, indicating text is spilling out of its box or causing a scrollbar inside a card.
+- [x] **Proximity Violations:** Interactive elements (like two buttons) placed too close together (e.g., < 8px gap).
+- [x] **Basic Contrast Ratio:** Comparing CSS `color` against CSS `background-color` (only works on solid backgrounds, not images).
 
 ## 🟣 Category 2: AI Vision Model Required (Gemini 1.5 Flash / GPT-4o)
 *These are aesthetic or pixel-level issues that the DOM structure cannot understand. They require passing a screenshot to an AI Vision model.*
