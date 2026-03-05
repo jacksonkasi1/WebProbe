@@ -407,6 +407,286 @@ export async function analyzeResponsiveLive(url: string, viewports: Viewport[]):
           url,
         });
       }
+
+      // ─── NEW CATEGORY 1 AUDITS ──────────────────────────
+
+      // 1. Uncentered Modals/Popups
+      const uncenteredModals = await page.evaluate((viewportWidth) => {
+        const floatingElements = document.querySelectorAll("div, dialog, section");
+        const uncentered: { tag: string; class: string; leftGap: number; rightGap: number }[] = [];
+        
+        floatingElements.forEach((el) => {
+          const style = window.getComputedStyle(el);
+          if (style.position === 'fixed' || style.position === 'absolute') {
+            const rect = el.getBoundingClientRect();
+            // Check if it's acting like a modal (relatively large, taking up a good chunk of screen)
+            if (rect.width > 200 && rect.height > 100 && style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0') {
+              const leftGap = rect.left;
+              const rightGap = viewportWidth - rect.right;
+              
+              // If it's supposed to be centered, the gaps should be roughly equal
+              // If difference is more than 10px and it's not anchored to a specific side (e.g. left: 0 or right: 0)
+              if (Math.abs(leftGap - rightGap) > 10 && leftGap > 0 && rightGap > 0) {
+                // Ignore elements that are 100% width
+                if (rect.width < viewportWidth - 20) {
+                  uncentered.push({
+                    tag: el.tagName.toLowerCase(),
+                    class: typeof el.className === 'string' && el.className ? `.${el.className.split(' ').join('.')}` : '',
+                    leftGap: Math.round(leftGap),
+                    rightGap: Math.round(rightGap)
+                  });
+                }
+              }
+            }
+          }
+        });
+        return uncentered.slice(0, 5);
+      }, vp.width);
+
+      if (uncenteredModals.length > 0) {
+        issues.push({
+          id: `responsive-uncentered-modals-${vp.width}`,
+          category: "responsive",
+          severity: "warning",
+          title: `Uncentered floating elements/modals on ${viewportName}`,
+          description: "Elements that appear to be modals or popups are not centrally aligned.",
+          actual: uncenteredModals.map(m => `<${m.tag}${m.class}> (Left gap: ${m.leftGap}px, Right gap: ${m.rightGap}px)`).join("\n"),
+          expected: "Equal left and right gaps for centered modals",
+          url,
+        });
+      }
+
+      // 2. Invisible Text & Basic Contrast Ratio
+      const contrastIssues = await page.evaluate(() => {
+        const parseRGB = (color: string) => {
+          const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+          return match ? [parseInt(match[1]), parseInt(match[2]), parseInt(match[3])] : [0,0,0];
+        };
+        const getLuminance = (r: number, g: number, b: number) => {
+          const a = [r, g, b].map(v => {
+            v /= 255;
+            return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+          });
+          return a[0] * 0.2126 + a[1] * 0.7152 + a[2] * 0.0722;
+        };
+
+        const elements = document.querySelectorAll("p, h1, h2, h3, h4, h5, h6, span, a, button, li");
+        const issues: { type: string; text: string; color: string; bg: string; ratio?: number }[] = [];
+        
+        // Cache computed styles to avoid excessive recalcs
+        const styleCache = new Map<Element, CSSStyleDeclaration>();
+        const getStyle = (el: Element) => {
+          if (!styleCache.has(el)) {
+            styleCache.set(el, window.getComputedStyle(el));
+          }
+          return styleCache.get(el)!;
+        };
+
+        // Cache resolved backgrounds
+        const bgCache = new Map<Element, string>();
+        const getResolvedBackground = (el: Element): string => {
+          if (bgCache.has(el)) return bgCache.get(el)!;
+          
+          const style = getStyle(el);
+          const bg = style.backgroundColor;
+          if (bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
+            bgCache.set(el, bg);
+            return bg;
+          }
+          
+          if (el.parentElement) {
+            const parentBg = getResolvedBackground(el.parentElement);
+            bgCache.set(el, parentBg);
+            return parentBg;
+          }
+          
+          return 'rgb(255, 255, 255)'; // Default fallback
+        };
+
+        let elementsProcessed = 0;
+
+        for (const el of Array.from(elements)) {
+          if (elementsProcessed > 500) break; // Hard limit to avoid hangs
+          
+          if (!el.textContent || el.textContent.trim().length === 0) continue;
+          
+          // Basic visibility check
+          const rect = el.getBoundingClientRect();
+          if (rect.width === 0 || rect.height === 0) continue;
+
+          elementsProcessed++;
+          
+          const style = getStyle(el);
+          const color = style.color;
+          const bgColor = getResolvedBackground(el);
+
+          if (color === bgColor) {
+             issues.push({
+               type: 'Invisible Text',
+               text: el.textContent.trim().substring(0, 20),
+               color,
+               bg: bgColor
+             });
+          } else {
+            const textRGB = parseRGB(color);
+            const bgRGB = parseRGB(bgColor);
+            const l1 = getLuminance(textRGB[0], textRGB[1], textRGB[2]);
+            const l2 = getLuminance(bgRGB[0], bgRGB[1], bgRGB[2]);
+            const ratio = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+            
+            const fontSize = parseFloat(style.fontSize);
+            const isLarge = fontSize >= 24 || (fontSize >= 18 && style.fontWeight >= '700');
+            const requiredRatio = isLarge ? 3 : 4.5;
+            
+            if (ratio < requiredRatio && ratio < 2.5) {
+               let parent: Element | null = el;
+               let hasBgImage = false;
+               let depth = 0;
+               while (parent && depth < 3) { // Limit depth check for images
+                 const pStyle = getStyle(parent);
+                 if (pStyle.backgroundImage !== 'none' && pStyle.backgroundImage !== 'initial') {
+                   hasBgImage = true;
+                   break;
+                 }
+                 parent = parent.parentElement;
+                 depth++;
+               }
+               
+               if (!hasBgImage) {
+                 issues.push({
+                   type: 'Low Contrast',
+                   text: el.textContent.trim().substring(0, 20),
+                   color,
+                   bg: bgColor,
+                   ratio: Math.round(ratio * 10) / 10
+                 });
+               }
+            }
+          }
+        }
+        return issues.slice(0, 5);
+      });
+
+      const invisibleText = contrastIssues.filter(i => i.type === 'Invisible Text');
+      if (invisibleText.length > 0) {
+        issues.push({
+          id: `responsive-invisible-text-${vp.width}`,
+          category: "responsive",
+          severity: "critical",
+          title: `Invisible text detected on ${viewportName}`,
+          description: "Text color exactly matches the background color, rendering it invisible.",
+          actual: invisibleText.map(i => `"${i.text}" (Color: ${i.color})`).join("\n"),
+          expected: "Text color must contrast with background",
+          url,
+        });
+      }
+
+      const lowContrast = contrastIssues.filter(i => i.type === 'Low Contrast');
+      if (lowContrast.length > 0) {
+        issues.push({
+          id: `responsive-low-contrast-${vp.width}`,
+          category: "responsive",
+          severity: "warning",
+          title: `Low contrast text detected on ${viewportName}`,
+          description: "Text contrast ratio falls below WCAG recommendations.",
+          actual: lowContrast.map(i => `"${i.text}" (Ratio: ${i.ratio}:1)`).join("\n"),
+          expected: "Contrast ratio of at least 4.5:1 for normal text (3:1 for large text)",
+          url,
+        });
+      }
+
+      // 3. Container Text Overflow
+      const overflowText = await page.evaluate(() => {
+        const elements = document.querySelectorAll("p, span, h1, h2, h3, h4, h5, h6, div");
+        const overflows: { tag: string; text: string; scrollWidth: number; clientWidth: number }[] = [];
+        
+        elements.forEach((el) => {
+          if (el.scrollWidth > el.clientWidth && el.clientWidth > 0) {
+            const style = window.getComputedStyle(el);
+            if (style.overflow !== 'hidden' && style.overflowX !== 'auto' && style.overflowX !== 'scroll') {
+               // Must contain direct text to be considered a text overflow, rather than just child elements
+               let hasText = false;
+               el.childNodes.forEach(n => {
+                 if (n.nodeType === Node.TEXT_NODE && n.textContent && n.textContent.trim().length > 0) hasText = true;
+               });
+               
+               if (hasText) {
+                 overflows.push({
+                   tag: el.tagName.toLowerCase(),
+                   text: (el.textContent || "").trim().substring(0, 30),
+                   scrollWidth: Math.round(el.scrollWidth),
+                   clientWidth: Math.round(el.clientWidth)
+                 });
+               }
+            }
+          }
+        });
+        return overflows.slice(0, 5);
+      });
+
+      if (overflowText.length > 0) {
+        issues.push({
+          id: `responsive-text-overflow-${vp.width}`,
+          category: "responsive",
+          severity: "warning",
+          title: `Text overflowing container on ${viewportName}`,
+          description: "Text content is spilling out of its container bounding box without proper overflow handling.",
+          actual: overflowText.map(o => `<${o.tag}> "${o.text}" (Content: ${o.scrollWidth}px, Container: ${o.clientWidth}px)`).join("\n"),
+          expected: "Text should wrap or use text-overflow: ellipsis",
+          url,
+        });
+      }
+
+      // 4. Proximity Violations
+      const proximityViolations = await page.evaluate(() => {
+        const interactiveElements = Array.from(document.querySelectorAll(
+          "a, button, input, select, textarea, [role='button']"
+        )).filter(el => {
+          const rect = el.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        });
+        
+        const violations: string[] = [];
+        
+        // Limit number of interactive elements to check to avoid O(N^2) hang
+        const elementsToCheck = interactiveElements.slice(0, 150);
+        
+        for (let i = 0; i < elementsToCheck.length; i++) {
+          for (let j = i + 1; j < elementsToCheck.length; j++) {
+            const el1 = elementsToCheck[i];
+            const el2 = elementsToCheck[j];
+            
+            if (el1.contains(el2) || el2.contains(el1)) continue;
+            
+            const r1 = el1.getBoundingClientRect();
+            const r2 = el2.getBoundingClientRect();
+            
+            const distanceX = Math.max(0, Math.max(r1.left - r2.right, r2.left - r1.right));
+            const distanceY = Math.max(0, Math.max(r1.top - r2.bottom, r2.top - r1.bottom));
+            const distance = Math.max(distanceX, distanceY);
+            
+            if (distance > 0 && distance < 8) {
+              const text1 = (el1.textContent?.trim() || el1.tagName).substring(0, 15);
+              const text2 = (el2.textContent?.trim() || el2.tagName).substring(0, 15);
+              violations.push(`"${text1}" is too close to "${text2}" (${Math.round(distance)}px gap)`);
+            }
+          }
+        }
+        return Array.from(new Set(violations)).slice(0, 5);
+      });
+
+      if (proximityViolations.length > 0) {
+        issues.push({
+          id: `responsive-proximity-violations-${vp.width}`,
+          category: "responsive",
+          severity: "warning",
+          title: `Interactive elements too close together on ${viewportName}`,
+          description: "Tap targets should have at least 8px of space between them to prevent accidental clicks.",
+          actual: proximityViolations.join("\n"),
+          expected: "Minimum 8px gap between interactive elements",
+          url,
+        });
+      }
     }
 
     await page.close();

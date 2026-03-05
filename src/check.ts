@@ -116,7 +116,7 @@ export async function runCheck(options: CheckOptions): Promise<void> {
     // Hard 45s timeout prevents hangs on sites with persistent network activity
     const liveSpinner = ora("Running live browser checks...").start();
     try {
-      const liveTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 45000));
+      const liveTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 90000));
       const liveChecks = Promise.allSettled([
         analyzeResponsiveLive(options.url, viewports),
         analyzeAccessibilityLive(options.url),
