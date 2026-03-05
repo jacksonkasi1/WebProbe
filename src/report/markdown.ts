@@ -68,21 +68,42 @@ export function generateMarkdownReport(result: CheckResult, reportPath?: string)
   if (result.screenshots.length > 0) {
     lines.push("## Screenshots");
     lines.push("");
+    
+    // Group screenshots by page/url if possible, otherwise just list them
+    const screenshotsByUrl = new Map<string, typeof result.screenshots>();
+    
     for (const screenshot of result.screenshots) {
-      // Use a path relative to the report file so images render correctly
-      const imgPath = reportPath
-        ? relative(dirname(reportPath), screenshot.path)
-        : screenshot.path;
-      lines.push(
-        `### ${screenshot.viewport}`
-      );
-      lines.push(
-        `![${screenshot.viewport}](${imgPath})`
-      );
-      lines.push(
-        `*${screenshot.width}×${screenshot.height}${screenshot.fullPage ? " (full page)" : " (above fold)"}*`
-      );
+       // Extract URL slug from filename if possible (e.g. index--mobile...)
+       const filename = screenshot.path.split('/').pop() || "";
+       const parts = filename.split('--');
+       const page = parts.length > 1 ? parts[0] : "Home";
+       
+       if (!screenshotsByUrl.has(page)) {
+         screenshotsByUrl.set(page, []);
+       }
+       screenshotsByUrl.get(page)!.push(screenshot);
+    }
+    
+    for (const [page, shots] of Array.from(screenshotsByUrl.entries())) {
+      lines.push(`### Page: /${page === 'index' ? '' : page}`);
       lines.push("");
+      
+      for (const screenshot of shots) {
+        // Use a path relative to the report file so images render correctly
+        const imgPath = reportPath
+          ? relative(dirname(reportPath), screenshot.path)
+          : screenshot.path;
+        lines.push(
+          `#### ${screenshot.viewport}`
+        );
+        lines.push(
+          `![${screenshot.viewport}](${imgPath})`
+        );
+        lines.push(
+          `*${screenshot.width}×${screenshot.height}${screenshot.fullPage ? " (full page)" : " (above fold)"}*`
+        );
+        lines.push("");
+      }
     }
   }
 
