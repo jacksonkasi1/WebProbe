@@ -25,14 +25,17 @@ export async function captureScreenshots(
       const page = await context.newPage();
 
       try {
-        await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
+        await page.goto(url, { waitUntil: "load", timeout: 20000 });
       } catch {
-        // Fallback to domcontentloaded if networkidle times out
-        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
+        try {
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
+        } catch {
+          // best-effort: continue with whatever was loaded
+        }
       }
 
-      // Wait for any lazy content
-      await page.waitForTimeout(1000);
+      // Brief pause for late-rendering JS
+      await page.waitForTimeout(500);
 
       const slug = vp.name.toLowerCase().replace(/[^a-z0-9]/g, "-");
       const filename = `${slug}-${vp.width}x${vp.height}.png`;
@@ -103,9 +106,13 @@ export async function captureAndAnalyzePage(url: string): Promise<{
   });
 
   try {
-    await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
+    await page.goto(url, { waitUntil: "load", timeout: 20000 });
   } catch {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
+    } catch {
+      // best-effort
+    }
   }
 
   const result = await page.evaluate(() => {

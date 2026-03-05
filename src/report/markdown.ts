@@ -1,3 +1,4 @@
+import { relative, dirname } from "path";
 import type { CheckResult, Issue, Category } from "../types.js";
 
 const CATEGORY_LABELS: Record<Category, { emoji: string; label: string }> = {
@@ -18,7 +19,7 @@ const SEVERITY_ICONS = {
   info: "🔵",
 };
 
-export function generateMarkdownReport(result: CheckResult): string {
+export function generateMarkdownReport(result: CheckResult, reportPath?: string): string {
   const lines: string[] = [];
 
   // Header
@@ -68,11 +69,15 @@ export function generateMarkdownReport(result: CheckResult): string {
     lines.push("## Screenshots");
     lines.push("");
     for (const screenshot of result.screenshots) {
+      // Use a path relative to the report file so images render correctly
+      const imgPath = reportPath
+        ? relative(dirname(reportPath), screenshot.path)
+        : screenshot.path;
       lines.push(
         `### ${screenshot.viewport}`
       );
       lines.push(
-        `![${screenshot.viewport}](${screenshot.path})`
+        `![${screenshot.viewport}](${imgPath})`
       );
       lines.push(
         `*${screenshot.width}×${screenshot.height}${screenshot.fullPage ? " (full page)" : " (above fold)"}*`
@@ -121,6 +126,10 @@ export function generateMarkdownReport(result: CheckResult): string {
       const icon = SEVERITY_ICONS[issue.severity];
       lines.push(`#### ${icon} ${issue.title}`);
       lines.push("");
+      if (issue.url) {
+        lines.push(`**Page:** \`${issue.url}\``);
+        lines.push("");
+      }
       lines.push(issue.description);
       lines.push("");
 
