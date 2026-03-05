@@ -93,6 +93,7 @@ program
         viewports: options.viewports,
         multiLanguage: options.multiLanguage,
       });
+      process.exit(0);
     } catch (err) {
       console.error(chalk.red("Error:"), err);
       process.exit(1);
@@ -116,6 +117,7 @@ program
       console.log(chalk.green(`\n✅ Captured ${shots.length} screenshots:`));
       shots.forEach((s) => console.log(chalk.dim(`   ${s.viewport}: ${s.path}`)));
       console.log();
+      process.exit(0);
     } catch (err) {
       console.error(chalk.red("Error:"), err);
       process.exit(1);
