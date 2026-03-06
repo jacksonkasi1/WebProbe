@@ -1,4 +1,5 @@
 import { XMLParser } from "fast-xml-parser";
+import { chromium, type Browser } from "playwright";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const robotsParser = require("robots-parser") as (url: string, txt: string) => { isAllowed(url: string, ua?: string): boolean | undefined };
 import { parseHTML } from "linkedom";
@@ -124,6 +125,9 @@ export async function crawlSite(args: CrawlArgs): Promise<CrawlScanResult> {
   const sitemapUrlsTested = new Set<string>();
   const sitemapUrlsWithErrors: string[] = [];
 
+  let browser: Browser | null = null;
+  let isSpaDetected = false;
+
   while (queue.length && visited.size < maxPages) {
     const { url, depth } = queue.shift()!;
     const key = normalizeUrlKey(url);
@@ -198,7 +202,37 @@ export async function crawlSite(args: CrawlArgs): Promise<CrawlScanResult> {
       continue;
     }
 
-    const page = parsePageHtml(html, url);
+    let finalHtml = html;
+
+    if (visited.size === 1) {
+      const { document: testDoc } = parseHTML(html);
+      const linkCount = testDoc.querySelectorAll("a[href]").length;
+      const hasRoot = html.includes('id="root"') || html.includes('id="__next"') || html.includes('id="app"');
+      if (linkCount < 3 || hasRoot) {
+        isSpaDetected = true;
+      }
+    }
+
+    if (isSpaDetected) {
+      if (!browser) {
+        browser = await chromium.launch({ headless: true });
+      }
+      try {
+        const context = await browser.newContext();
+        const pwPage = await context.newPage();
+        await pwPage.goto(url, { waitUntil: "load", timeout: 15000 }).catch(() => {});
+        await pwPage.waitForTimeout(1000);
+        const spaHtml = await pwPage.content();
+        await context.close();
+        if (spaHtml && spaHtml.length > html.length) {
+          finalHtml = spaHtml;
+        }
+      } catch (e) {
+        // Fallback to original html
+      }
+    }
+
+    const page = parsePageHtml(finalHtml, url);
     if (!page) continue;
 
     page.status = status;
@@ -218,7 +252,7 @@ export async function crawlSite(args: CrawlArgs): Promise<CrawlScanResult> {
     issues.push(...pageIssues);
 
     try {
-      const { document } = parseHTML(html);
+      const { document } = parseHTML(finalHtml);
       document.querySelectorAll("a[href]").forEach((el: any) => {
         const href = el.getAttribute("href");
         if (!href) return;
@@ -240,6 +274,10 @@ export async function crawlSite(args: CrawlArgs): Promise<CrawlScanResult> {
 
   if (!silent && !onProgress) {
     process.stdout.write("\n");
+  }
+
+  if (browser) {
+    await browser.close().catch(() => {});
   }
 
   const duplicateIssues = findDuplicateIssues(pages);

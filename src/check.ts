@@ -6,7 +6,7 @@ import { analyzeAccessibilityLive } from "./analyzers/accessibility.js";
 import { analyzeCodeQuality } from "./analyzers/code-quality.js";
 import { confirmSiteInfo, confirmProceed, askMultiLanguage } from "./prompts.js";
 import { generateMarkdownReport } from "./report/markdown.js";
-import { writeFileSync, mkdirSync } from "fs";
+import { writeFileSync, mkdirSync, rmSync, existsSync } from "fs";
 import { dirname } from "path";
 import type { CheckOptions, CheckResult, Issue, SiteInfo, Category } from "./types.js";
 import { VIEWPORTS } from "./types.js";
@@ -103,6 +103,12 @@ export async function runCheck(options: CheckOptions): Promise<void> {
       ).start();
 
       try {
+        // Clear previous screenshots to prevent old site images from lingering
+        if (existsSync(options.screenshots)) {
+          rmSync(options.screenshots, { recursive: true, force: true });
+        }
+        mkdirSync(options.screenshots, { recursive: true });
+
         const concurrency = options.concurrency || 3;
         const shots = await captureScreenshotsBatch(
           urlsToScreenshot, 
