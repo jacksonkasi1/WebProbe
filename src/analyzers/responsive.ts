@@ -125,16 +125,20 @@ export async function analyzeResponsiveLive(url: string, viewports: Viewport[]):
 /**
  * Check responsive behavior for multiple URLs reusing the same browser instance
  */
-export async function analyzeResponsiveLiveBatch(urls: string[], viewports: Viewport[], onProgress?: (url: string) => void): Promise<Issue[]> {
+export async function analyzeResponsiveLiveBatch(
+  urls: string[], 
+  viewports: Viewport[], 
+  concurrency: number = 3,
+  onProgress?: (url: string) => void
+): Promise<Issue[]> {
   const { chromium } = await import("playwright");
   const allIssues: Issue[] = [];
   const browser = await chromium.launch({ headless: true });
 
   try {
-    // Process in chunks of 2 to avoid overwhelming the browser/memory
-    const chunkSize = 2;
-    for (let i = 0; i < urls.length; i += chunkSize) {
-      const chunk = urls.slice(i, i + chunkSize);
+    // Process in chunks to avoid overwhelming the browser/memory
+    for (let i = 0; i < urls.length; i += concurrency) {
+      const chunk = urls.slice(i, i + concurrency);
       
       const chunkPromises = chunk.map(async (url) => {
         if (onProgress) onProgress(url);
@@ -211,6 +215,64 @@ export async function analyzeResponsiveLiveBatch(urls: string[], viewports: View
                   url,
                 });
               }
+            }
+
+            // Bleeding Elements Detector (elements bleeding out of the right edge, causing layout break or hidden content)
+            const bleedingElements = await page.evaluate((viewportWidth) => {
+              const body = document.body;
+              // Check all elements to see if they bleed off the right edge significantly
+              const elements = body.querySelectorAll("*");
+              const bleeding: { tag: string; class: string; left: number; right: number; width: number }[] = [];
+              
+              elements.forEach((el) => {
+                if (['SCRIPT', 'STYLE', 'META', 'HEAD', 'NOSCRIPT', 'LINK', 'BR'].includes(el.tagName)) return;
+                
+                const rect = el.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0) {
+                  // If it bleeds off the right edge (more than 5px to avoid subpixel rounding)
+                  // AND its left edge is visible (so it's not completely off-screen, which is caught by offscreen detector)
+                  // AND it's not a full-width container (e.g. 100vw) that's just a tiny bit wider due to scrollbars
+                  if (rect.right > viewportWidth + 5 && rect.left >= 0 && rect.left < viewportWidth) {
+                    const style = window.getComputedStyle(el);
+                    // Ignore elements that are meant to scroll
+                    if (style.overflowX !== 'auto' && style.overflowX !== 'scroll' && style.overflowX !== 'hidden') {
+                       bleeding.push({
+                         tag: el.tagName.toLowerCase(),
+                         class: typeof el.className === 'string' && el.className ? `.${el.className.split(' ')[0]}` : '',
+                         left: Math.round(rect.left),
+                         right: Math.round(rect.right),
+                         width: Math.round(rect.width)
+                       });
+                    }
+                  }
+                }
+              });
+              
+              // Filter out children if their parent is already bleeding
+              const filtered = bleeding.filter((b, index, arr) => {
+                 // basic heuristic: if another element has very similar left/right, it might be a parent
+                 for (let i = 0; i < index; i++) {
+                    if (Math.abs(arr[i].left - b.left) < 10 && Math.abs(arr[i].right - b.right) < 10) {
+                       return false;
+                    }
+                 }
+                 return true;
+              });
+              
+              return filtered.slice(0, 5);
+            }, vp.width);
+
+            if (bleedingElements.length > 0) {
+              issues.push({
+                id: `responsive-bleeding-elements-${vp.width}-${url}`,
+                category: "responsive",
+                severity: "critical",
+                title: `Elements bleeding out of viewport on ${viewportName}`,
+                description: "These elements are partially off-screen, breaking the layout and causing visual bugs.",
+                actual: bleedingElements.map(b => `<${b.tag}${b.class}> (extends to ${b.right}px)`).join(", "),
+                expected: `Elements should be fully contained within ${vp.width}px`,
+                url,
+              });
             }
 
             // Check touch target sizes & padding (more relevant on smaller screens)
@@ -303,15 +365,16 @@ export async function analyzeResponsiveLiveBatch(urls: string[], viewports: View
               const smallText = await page.evaluate(() => {
                 const textElements = document.querySelectorAll("p, span, li, td, th, label, a");
                 let smallCount = 0;
-
-                textElements.forEach((el) => {
+                let processed = 0;
+                for (const el of Array.from(textElements)) {
+                  if (processed > 200) break; // Hard limit
+                  processed++;
                   const styles = window.getComputedStyle(el);
                   const fontSize = parseFloat(styles.fontSize);
                   if (fontSize < 14 && el.textContent && el.textContent.trim().length > 5) {
                     smallCount++;
                   }
-                });
-
+                }
                 return smallCount;
               });
 
@@ -372,7 +435,7 @@ export async function analyzeResponsiveLiveBatch(urls: string[], viewports: View
                 const rect = el.getBoundingClientRect();
                 // Filter to elements near the top of the page with some size
                 return rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.top < 300;
-              });
+              }).slice(0, 100); // HARD LIMIT to prevent O(N^2) hang
 
               const overlaps: string[] = [];
 
@@ -492,7 +555,6 @@ export async function analyzeResponsiveLiveBatch(urls: string[], viewports: View
               const elements = document.querySelectorAll("p, h1, h2, h3, h4, h5, h6, span, a, button, li");
               const issues: { type: string; text: string; color: string; bg: string; ratio?: number }[] = [];
               
-              // Cache computed styles to avoid excessive recalcs
               const styleCache = new Map<Element, CSSStyleDeclaration>();
               const getStyle = (el: Element) => {
                 if (!styleCache.has(el)) {
@@ -501,9 +563,9 @@ export async function analyzeResponsiveLiveBatch(urls: string[], viewports: View
                 return styleCache.get(el)!;
               };
 
-              // Cache resolved backgrounds
               const bgCache = new Map<Element, string>();
-              const getResolvedBackground = (el: Element): string => {
+              const getResolvedBackground = (el: Element, depth = 0): string => {
+                if (depth > 5) return 'rgb(255, 255, 255)'; // safety escape
                 if (bgCache.has(el)) return bgCache.get(el)!;
                 
                 const style = getStyle(el);
@@ -514,22 +576,21 @@ export async function analyzeResponsiveLiveBatch(urls: string[], viewports: View
                 }
                 
                 if (el.parentElement) {
-                  const parentBg = getResolvedBackground(el.parentElement);
+                  const parentBg = getResolvedBackground(el.parentElement, depth + 1);
                   bgCache.set(el, parentBg);
                   return parentBg;
                 }
                 
-                return 'rgb(255, 255, 255)'; // Default fallback
+                return 'rgb(255, 255, 255)';
               };
 
               let elementsProcessed = 0;
 
               for (const el of Array.from(elements)) {
-                if (elementsProcessed > 500) break; // Hard limit to avoid hangs
+                if (elementsProcessed > 150) break; // VERY HARD limit to avoid hangs
                 
                 if (!el.textContent || el.textContent.trim().length === 0) continue;
                 
-                // Basic visibility check
                 const rect = el.getBoundingClientRect();
                 if (rect.width === 0 || rect.height === 0) continue;
 
@@ -561,7 +622,7 @@ export async function analyzeResponsiveLiveBatch(urls: string[], viewports: View
                      let parent: Element | null = el;
                      let hasBgImage = false;
                      let depth = 0;
-                     while (parent && depth < 3) { // Limit depth check for images
+                     while (parent && depth < 2) { 
                        const pStyle = getStyle(parent);
                        if (pStyle.backgroundImage !== 'none' && pStyle.backgroundImage !== 'initial') {
                          hasBgImage = true;
@@ -619,11 +680,13 @@ export async function analyzeResponsiveLiveBatch(urls: string[], viewports: View
               const elements = document.querySelectorAll("p, span, h1, h2, h3, h4, h5, h6, div");
               const overflows: { tag: string; text: string; scrollWidth: number; clientWidth: number }[] = [];
               
-              elements.forEach((el) => {
+              let processed = 0;
+              for (const el of Array.from(elements)) {
+                if (processed > 200) break;
+                processed++;
                 if (el.scrollWidth > el.clientWidth && el.clientWidth > 0) {
                   const style = window.getComputedStyle(el);
                   if (style.overflow !== 'hidden' && style.overflowX !== 'auto' && style.overflowX !== 'scroll') {
-                     // Must contain direct text to be considered a text overflow, rather than just child elements
                      let hasText = false;
                      el.childNodes.forEach(n => {
                        if (n.nodeType === Node.TEXT_NODE && n.textContent && n.textContent.trim().length > 0) hasText = true;
@@ -639,7 +702,7 @@ export async function analyzeResponsiveLiveBatch(urls: string[], viewports: View
                      }
                   }
                 }
-              });
+              }
               return overflows.slice(0, 5);
             });
 
@@ -668,7 +731,7 @@ export async function analyzeResponsiveLiveBatch(urls: string[], viewports: View
               const violations: string[] = [];
               
               // Limit number of interactive elements to check to avoid O(N^2) hang
-              const elementsToCheck = interactiveElements.slice(0, 150);
+              const elementsToCheck = interactiveElements.slice(0, 50); // HARD LIMIT
               
               for (let i = 0; i < elementsToCheck.length; i++) {
                 for (let j = i + 1; j < elementsToCheck.length; j++) {
