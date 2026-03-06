@@ -208,7 +208,10 @@ export async function analyzeAccessibilityLive(url: string): Promise<Issue[]> {
 
       const textElements = document.querySelectorAll("p, span, a, li, h1, h2, h3, h4, h5, h6, label, td, th");
 
-      textElements.forEach((el) => {
+      let processed = 0;
+      for (const el of Array.from(textElements)) {
+        if (processed > 200) break; // Hard limit for speed
+        processed++;
         const style = window.getComputedStyle(el);
         const fg = parseColor(style.color);
         const bg = parseColor(style.backgroundColor);
@@ -230,7 +233,7 @@ export async function analyzeAccessibilityLive(url: string): Promise<Issue[]> {
             );
           }
         }
-      });
+      }
 
       return problems.slice(0, 10);
     });

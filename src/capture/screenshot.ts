@@ -3,97 +3,121 @@ import { mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import type { Viewport, Screenshot } from "../types.js";
 
-export async function captureScreenshots(
-  url: string,
+export async function captureScreenshotsBatch(
+  urls: string[],
   viewports: Viewport[],
-  outputDir: string
+  outputDir: string,
+  concurrency: number = 3,
+  onProgress?: (url: string) => void
 ): Promise<Screenshot[]> {
   if (!existsSync(outputDir)) {
     mkdirSync(outputDir, { recursive: true });
   }
 
   const browser = await chromium.launch({ headless: true });
-  const screenshots: Screenshot[] = [];
+  const allScreenshots: Screenshot[] = [];
 
   try {
-    for (const vp of viewports) {
-      const context = await browser.newContext({
-        viewport: { width: vp.width, height: vp.height },
-        deviceScaleFactor: vp.width <= 375 ? 2 : 1,
-      });
-
-      const page = await context.newPage();
-
-      try {
-        await page.goto(url, { waitUntil: "load", timeout: 20000 });
-      } catch {
-        try {
-          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
-        } catch {
-          // best-effort: continue with whatever was loaded
-        }
-      }
-
-      // Brief pause for late-rendering JS
-      await page.waitForTimeout(500);
-
-      // Extract a safe URL path to make unique filenames per page
-      try {
-        const parsedUrl = new URL(url);
-        let pathSlug = parsedUrl.pathname.replace(/[^a-zA-Z0-9]/g, "-").replace(/-+/g, "-");
-        if (pathSlug === "-" || pathSlug === "") pathSlug = "index";
-        if (pathSlug.startsWith("-")) pathSlug = pathSlug.substring(1);
-        if (pathSlug.endsWith("-")) pathSlug = pathSlug.substring(0, pathSlug.length - 1);
+    for (let i = 0; i < urls.length; i += concurrency) {
+      const chunk = urls.slice(i, i + concurrency);
+      
+      const chunkPromises = chunk.map(async (url) => {
+        if (onProgress) onProgress(url);
+        const screenshots: Screenshot[] = [];
         
-        const slug = vp.name.toLowerCase().replace(/[^a-z0-9]/g, "-");
-        
-        // Structure: index--mobile--375x812.png OR about-us--desktop--1440x900.png
-        const filename = `${pathSlug}--${slug}--${vp.width}x${vp.height}.png`;
-        const filepath = join(outputDir, filename);
+        for (const vp of viewports) {
+          const context = await browser.newContext({
+            viewport: { width: vp.width, height: vp.height },
+            deviceScaleFactor: vp.width <= 375 ? 2 : 1,
+          });
 
-        await page.screenshot({
-          path: filepath,
-          fullPage: true,
-        });
+          const page = await context.newPage();
 
-        // Also take above-the-fold screenshot
-        const foldFilename = `${pathSlug}--${slug}--${vp.width}x${vp.height}-fold.png`;
-        const foldPath = join(outputDir, foldFilename);
-        await page.screenshot({
-          path: foldPath,
-          fullPage: false,
-        });
+          try {
+            // Hard timeout for page navigation
+            const navigate = async () => {
+              try {
+                await page.goto(url, { waitUntil: "load", timeout: 15000 });
+              } catch {
+                try {
+                  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 10000 });
+                } catch {
+                  // best-effort
+                }
+              }
+              await page.waitForTimeout(500);
+            };
 
-        screenshots.push(
-          {
-            viewport: vp.name,
-            width: vp.width,
-            height: vp.height,
-            path: filepath,
-            fullPage: true,
-          },
-          {
-            viewport: `${vp.name} (above fold)`,
-            width: vp.width,
-            height: vp.height,
-            path: foldPath,
-            fullPage: false,
+            await Promise.race([
+              navigate(),
+              new Promise(r => setTimeout(r, 20000))
+            ]);
+
+            let pathSlug = "index";
+            try {
+              const parsedUrl = new URL(url);
+              pathSlug = parsedUrl.pathname.replace(/[^a-zA-Z0-9]/g, "-").replace(/-+/g, "-");
+              if (pathSlug === "-" || pathSlug === "") pathSlug = "index";
+              if (pathSlug.startsWith("-")) pathSlug = pathSlug.substring(1);
+              if (pathSlug.endsWith("-")) pathSlug = pathSlug.substring(0, pathSlug.length - 1);
+            } catch (e) {
+              // ignore
+            }
+            
+            const slug = vp.name.toLowerCase().replace(/[^a-z0-9]/g, "-");
+            const filename = `${pathSlug}--${slug}--${vp.width}x${vp.height}.png`;
+            const filepath = join(outputDir, filename);
+
+            try {
+              await page.screenshot({ path: filepath, fullPage: true, timeout: 5000 });
+            } catch (e) {
+              // screenshot failed, ignore
+            }
+
+            const foldFilename = `${pathSlug}--${slug}--${vp.width}x${vp.height}-fold.png`;
+            const foldPath = join(outputDir, foldFilename);
+            try {
+              await page.screenshot({ path: foldPath, fullPage: false, timeout: 5000 });
+            } catch (e) {
+              // ignore
+            }
+
+            if (existsSync(filepath)) {
+              screenshots.push({
+                viewport: vp.name,
+                width: vp.width,
+                height: vp.height,
+                path: filepath,
+                fullPage: true,
+              });
+            }
+            
+            if (existsSync(foldPath)) {
+              screenshots.push({
+                viewport: `${vp.name} (above fold)`,
+                width: vp.width,
+                height: vp.height,
+                path: foldPath,
+                fullPage: false,
+              });
+            }
+          } finally {
+            await context.close();
           }
-        );
-      } catch (e) {
-        // Fallback if URL parsing fails
-        const slug = vp.name.toLowerCase().replace(/[^a-z0-9]/g, "-");
-        const filename = `${slug}-${vp.width}x${vp.height}.png`;
-        await page.screenshot({ path: join(outputDir, filename), fullPage: true });
+        }
+        return screenshots;
+      });
+      
+      const chunkResults = await Promise.all(chunkPromises);
+      for (const res of chunkResults) {
+        allScreenshots.push(...res);
       }
-
-      await context.close();
     }
   } finally {
     await browser.close();
   }
 
-  return screenshots;
+  return allScreenshots;
 }
 
 /**

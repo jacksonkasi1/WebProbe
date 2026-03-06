@@ -4,7 +4,7 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { initStandards } from "./init.js";
 import { runCheck } from "./check.js";
-import { captureScreenshots } from "./capture/screenshot.js";
+import { captureScreenshotsBatch } from "./capture/screenshot.js";
 import { VIEWPORTS } from "./types.js";
 
 const program = new Command();
@@ -52,6 +52,7 @@ program
   .option("--no-interactive", "Skip confirmation prompts (for agent use)")
   .option("-s, --screenshots <dir>", "Screenshots directory", "./output/screenshots")
   .option("-v, --viewports <list>", "Viewports to capture (comma-separated)", "mobile,tablet,desktop")
+  .option("-p, --concurrency <number>", "Number of concurrent pages to test", "3")
   .action(async (options) => {
     try {
       if (!options.url && !options.code) {
@@ -92,6 +93,7 @@ program
         screenshots: options.screenshots,
         viewports: options.viewports,
         multiLanguage: options.multiLanguage,
+        concurrency: parseInt(options.concurrency, 10),
       });
       process.exit(0);
     } catch (err) {
@@ -113,9 +115,9 @@ program
         .map((name: string) => VIEWPORTS[name])
         .filter(Boolean);
 
-      const shots = await captureScreenshots(url, viewports, options.output);
+      const shots = await captureScreenshotsBatch([url], viewports, options.output, 1);
       console.log(chalk.green(`\n✅ Captured ${shots.length} screenshots:`));
-      shots.forEach((s) => console.log(chalk.dim(`   ${s.viewport}: ${s.path}`)));
+      shots.forEach((s: any) => console.log(chalk.dim(`   ${s.viewport}: ${s.path}`)));
       console.log();
       process.exit(0);
     } catch (err) {

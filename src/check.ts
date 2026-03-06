@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import ora from "ora";
-import { captureScreenshots, captureAndAnalyzePage } from "./capture/screenshot.js";
+import { captureScreenshotsBatch, captureAndAnalyzePage } from "./capture/screenshot.js";
 import { analyzeResponsiveLive, analyzeResponsiveLiveBatch } from "./analyzers/responsive.js";
 import { analyzeAccessibilityLive } from "./analyzers/accessibility.js";
 import { analyzeCodeQuality } from "./analyzers/code-quality.js";
@@ -93,29 +93,27 @@ export async function runCheck(options: CheckOptions): Promise<void> {
       .filter(Boolean);
 
     if (viewports.length > 0) {
-      const urlsToScreenshot = crawlResult.pages.map((p) => p.url);
+      // Best approach for DX: Limit visual audits to top 5 pages by default to prevent timeouts and huge folders
+      // If user sets concurrency > 5, we use that as the limit.
+      const maxVisualPages = Math.max(5, options.concurrency || 3);
+      const urlsToScreenshot = crawlResult.pages.map((p) => p.url).slice(0, maxVisualPages);
+      
       const screenshotSpinner = ora(
-        `Capturing screenshots for ${urlsToScreenshot.length} pages...`
+        `Capturing screenshots for top ${urlsToScreenshot.length} pages (best DX approach)...`
       ).start();
 
       try {
-        // Run in batches of 3 to avoid overwhelming memory
-        const chunkSize = 3;
-        for (let i = 0; i < urlsToScreenshot.length; i += chunkSize) {
-          const chunk = urlsToScreenshot.slice(i, i + chunkSize);
-          screenshotSpinner.text = `Capturing screenshots: Batch ${Math.floor(i/chunkSize) + 1}/${Math.ceil(urlsToScreenshot.length/chunkSize)}...`;
-          
-          const chunkPromises = chunk.map(url => 
-            captureScreenshots(url, viewports, options.screenshots)
-          );
-          
-          const chunkResults = await Promise.allSettled(chunkPromises);
-          for (const result of chunkResults) {
-            if (result.status === "fulfilled") {
-              screenshots.push(...result.value);
-            }
+        const concurrency = options.concurrency || 3;
+        const shots = await captureScreenshotsBatch(
+          urlsToScreenshot, 
+          viewports, 
+          options.screenshots,
+          concurrency,
+          (url) => {
+             screenshotSpinner.text = `Capturing screenshots: ${url}`;
           }
-        }
+        );
+        screenshots.push(...shots);
         
         screenshotSpinner.succeed(
           `Captured ${screenshots.length} screenshots → ${options.screenshots}/`
@@ -127,14 +125,15 @@ export async function runCheck(options: CheckOptions): Promise<void> {
 
     // 1d: Run Playwright-based live checks (responsive + accessibility)
     // These only run on the entry URL since they need a real browser
-    // Hard 45s timeout prevents hangs on sites with persistent network activity
     const liveSpinner = ora("Running live browser checks...").start();
     try {
-      const urlsToTest = crawlResult.pages.map((p) => p.url); // test all pages
+      // Best approach for DX: limit layout DOM checks to top 3 pages unless user sets higher concurrency
+      const maxVisualPages = Math.max(3, options.concurrency || 3);
+      const urlsToTest = crawlResult.pages.map((p) => p.url).slice(0, maxVisualPages);
       
-      const liveTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 300000)); // 5 minutes max for full site layout checks
+      const liveTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 300000)); // 5 mins max
       const liveChecks = Promise.allSettled([
-        analyzeResponsiveLiveBatch(urlsToTest, viewports, (url) => {
+        analyzeResponsiveLiveBatch(urlsToTest, viewports, options.concurrency || 3, (url) => {
           liveSpinner.text = `Visual/responsive check: ${url}`;
         }),
         analyzeAccessibilityLive(options.url), // Still just entry page for now as a baseline

@@ -52,6 +52,7 @@ export interface CheckOptions {
   screenshots: string;
   viewports: string;
   multiLanguage?: boolean;
+  concurrency: number;
 }
 
 export interface CheckResult {
