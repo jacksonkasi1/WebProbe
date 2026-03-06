@@ -192,11 +192,25 @@ export async function analyzeResponsiveLiveBatch(
                   if (rect.width > viewportWidth) {
                     const style = window.getComputedStyle(el);
                     if (style.overflowX !== 'auto' && style.overflowX !== 'scroll' && style.overflowX !== 'hidden') {
-                      culprits.push({
-                        tag: el.tagName.toLowerCase(),
-                        class: typeof el.className === 'string' && el.className ? `.${el.className.split(' ').join('.')}` : '',
-                        width: Math.round(rect.width)
-                      });
+                       // Check if any parent element is intentionally clipping or scrolling the content
+                       let isClippedByParent = false;
+                       let parent = el.parentElement;
+                       while (parent && parent !== document.documentElement) {
+                         const parentStyle = window.getComputedStyle(parent);
+                         if (parentStyle.overflowX === 'hidden' || parentStyle.overflowX === 'scroll' || parentStyle.overflowX === 'auto') {
+                           isClippedByParent = true;
+                           break;
+                         }
+                         parent = parent.parentElement;
+                       }
+                       
+                       if (!isClippedByParent) {
+                         culprits.push({
+                           tag: el.tagName.toLowerCase(),
+                           class: typeof el.className === 'string' && el.className ? `.${el.className.split(' ').join('.')}` : '',
+                           width: Math.round(rect.width)
+                         });
+                       }
                     }
                   }
                 });
@@ -236,13 +250,27 @@ export async function analyzeResponsiveLiveBatch(
                     const style = window.getComputedStyle(el);
                     // Ignore elements that are meant to scroll
                     if (style.overflowX !== 'auto' && style.overflowX !== 'scroll' && style.overflowX !== 'hidden') {
-                       bleeding.push({
-                         tag: el.tagName.toLowerCase(),
-                         class: typeof el.className === 'string' && el.className ? `.${el.className.split(' ')[0]}` : '',
-                         left: Math.round(rect.left),
-                         right: Math.round(rect.right),
-                         width: Math.round(rect.width)
-                       });
+                       // Check if any parent element is intentionally clipping or scrolling the content
+                       let isClippedByParent = false;
+                       let parent = el.parentElement;
+                       while (parent && parent !== document.documentElement) {
+                         const parentStyle = window.getComputedStyle(parent);
+                         if (parentStyle.overflowX === 'hidden' || parentStyle.overflowX === 'scroll' || parentStyle.overflowX === 'auto') {
+                           isClippedByParent = true;
+                           break;
+                         }
+                         parent = parent.parentElement;
+                       }
+                       
+                       if (!isClippedByParent) {
+                         bleeding.push({
+                           tag: el.tagName.toLowerCase(),
+                           class: typeof el.className === 'string' && el.className ? `.${el.className.split(' ')[0]}` : '',
+                           left: Math.round(rect.left),
+                           right: Math.round(rect.right),
+                           width: Math.round(rect.width)
+                         });
+                       }
                     }
                   }
                 }
